@@ -1,0 +1,49 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Local databases and runtime files
+*.db
+*.sqlite
+*.sqlite3
+
+# Audit logs and local integrity state
+logs/
+*.jsonl
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.stage*-backup
+*.stage*-integration-backup
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Local datasets and evaluation reports
+data/
+reports/
+
+# All development backup snapshots
+*.stage*
