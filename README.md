@@ -72,6 +72,25 @@ flowchart TD
     L --> M[Checkpoint verification]
     K --> N[Streamlit dashboard]
 ```
+## Dashboard Screenshots
+
+### 1. Security Console
+The PromptShield dashboard provides an interface for submitting
+documents and proposed agent actions for runtime security inspection.
+
+![PromptShield Security Console](docs/images/security-console.png)
+
+### 2. Threat Detection and Execution Containment
+PromptShield identifies suspicious instructions, evaluates risk,
+applies authorization policies, and blocks unauthorized actions.
+
+![Prompt Injection Detection](docs/images/threat-detection.png)
+
+### 3. Security Analytics and Audit Explorer
+The Audit Explorer provides visibility into recorded security events,
+policy decisions, execution outcomes, and suspicious activity.
+
+![PromptShield Audit Explorer](docs/images/audit-explorer.png)
 
 ### Request lifecycle
 
