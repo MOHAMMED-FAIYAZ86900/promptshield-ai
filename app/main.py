@@ -1,14 +1,22 @@
 
 from uuid import uuid4
 from typing import Any
+import os
+import json
+import secrets
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import (
+    FastAPI,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+)
 
 from app import tools
-from app.audit import write_audit_event
+from app.audit import write_audit_event, AUDIT_LOG_PATH
 from app.audit_integrity import append_integrity_event
-import os
-from pathlib import Path
 from app.detector import detect_prompt_injection
 from app.executor import (
     ToolExecutionError,
@@ -31,6 +39,39 @@ app = FastAPI(
 )
 
 
+# ============================================================
+# API AUTHENTICATION
+# ============================================================
+
+def verify_api_key(
+    x_api_key: str | None = Header(default=None),
+):
+    """
+    Require an API key when PROMPTSHIELD_API_KEY is configured.
+
+    Local development remains compatible when the variable
+    is not configured.
+    """
+
+    expected_key = os.getenv("PROMPTSHIELD_API_KEY")
+
+    if not expected_key:
+        return
+
+    if not x_api_key or not secrets.compare_digest(
+        x_api_key,
+        expected_key,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+        )
+
+
+# ============================================================
+# BASIC ENDPOINTS
+# ============================================================
+
 @app.get("/")
 def root():
     return {
@@ -44,6 +85,10 @@ def root():
 def health():
     return {"status": "healthy"}
 
+
+# ============================================================
+# AUDIT EVENT PERSISTENCE
+# ============================================================
 
 def _audit_event(
     *,
@@ -92,6 +137,10 @@ def _audit_event(
     return event
 
 
+# ============================================================
+# BLOCKED RESPONSE
+# ============================================================
+
 def _blocked_response(
     *,
     request_id: str,
@@ -112,8 +161,10 @@ def _blocked_response(
             execution_status="blocked",
             detection_evidence=detection_evidence,
         )
+
         audit_event_id = event["event_id"]
         audit_error = None
+
     except Exception:
         audit_event_id = None
         audit_error = "Audit persistence failed."
@@ -140,6 +191,10 @@ def _blocked_response(
     return response
 
 
+# ============================================================
+# AUTHORIZED TOOL EXECUTION
+# ============================================================
+
 def _run_authorized_action(
     *,
     request_id: str,
@@ -148,15 +203,16 @@ def _run_authorized_action(
     detection_evidence: dict[str, Any] | None = None,
 ):
     """
-    Validate, persist execution intent, execute, and record the outcome.
+    Validate, persist execution intent, execute, and record outcome.
 
-    The tool must not execute unless the execution-intent event has
-    been persisted successfully.
+    The tool must not execute unless the execution-intent event
+    has been persisted successfully.
     """
 
-    # 1. Authorize the action. Unknown and restricted actions fail closed.
+    # 1. Authorize the action.
     try:
         policy = authorize_action(action)
+
     except Exception:
         return _blocked_response(
             request_id=request_id,
@@ -175,9 +231,13 @@ def _run_authorized_action(
             detection_evidence=detection_evidence,
         )
 
-    # 2. Resolve the executor and validate arguments without execution.
+    # 2. Resolve executor and validate arguments.
     try:
-        prepared = prepare_registered_tool(action, arguments)
+        prepared = prepare_registered_tool(
+            action,
+            arguments,
+        )
+
     except ToolValidationError as exc:
         reason = str(exc)
 
@@ -191,8 +251,10 @@ def _run_authorized_action(
                 execution_status="validation_failed",
                 detection_evidence=detection_evidence,
             )
+
             audit_event_id = event["event_id"]
             audit_warning = None
+
         except Exception:
             audit_event_id = None
             audit_warning = "Audit persistence failed."
@@ -218,7 +280,7 @@ def _run_authorized_action(
 
         return response
 
-    # 3. Persist intent before any side effect.
+    # 3. Persist execution intent before side effects.
     try:
         intent_event = _audit_event(
             request_id=request_id,
@@ -229,8 +291,8 @@ def _run_authorized_action(
             execution_status="execution_intent",
             detection_evidence=detection_evidence,
         )
+
     except Exception:
-        # Critical invariant: do not execute if intent logging fails.
         return {
             "status": "blocked",
             "request_id": request_id,
@@ -253,6 +315,7 @@ def _run_authorized_action(
     # 4. Execute only after intent persistence succeeds.
     try:
         result = execute_prepared_tool(prepared)
+
     except ToolExecutionError:
         reason = "The authorized tool failed during execution."
 
@@ -266,8 +329,10 @@ def _run_authorized_action(
                 execution_status="execution_failed",
                 detection_evidence=detection_evidence,
             )
+
             outcome_event_id = outcome_event["event_id"]
             audit_warning = None
+
         except Exception:
             outcome_event_id = None
             audit_warning = "Outcome audit persistence failed."
@@ -305,12 +370,16 @@ def _run_authorized_action(
             execution_status="executed",
             detection_evidence=detection_evidence,
         )
+
         outcome_event_id = outcome_event["event_id"]
         audit_warning = None
+
     except Exception:
         # The tool already ran. Never misreport it as blocked.
         outcome_event_id = None
-        audit_warning = "Tool executed, but outcome audit persistence failed."
+        audit_warning = (
+            "Tool executed, but outcome audit persistence failed."
+        )
 
     response = {
         "status": "success",
@@ -336,8 +405,15 @@ def _run_authorized_action(
     return response
 
 
+# ============================================================
+# TOOL EXECUTION ENDPOINT
+# ============================================================
+
 @app.post("/agent/run")
-def execute_tool(request: ToolRequest):
+def execute_tool(
+    request: ToolRequest,
+    _: None = Depends(verify_api_key),
+):
     request_id = str(uuid4())
 
     return _run_authorized_action(
@@ -347,8 +423,15 @@ def execute_tool(request: ToolRequest):
     )
 
 
+# ============================================================
+# DOCUMENT ANALYSIS ENDPOINT
+# ============================================================
+
 @app.post("/agent/analyze-document")
-def analyze_document(request: DocumentAnalysisRequest):
+def analyze_document(
+    request: DocumentAnalysisRequest,
+    _: None = Depends(verify_api_key),
+):
     request_id = str(uuid4())
     action = request.proposed_action
 
@@ -364,6 +447,7 @@ def analyze_document(request: DocumentAnalysisRequest):
             ),
             "explanation": detection.explanation,
         }
+
     except Exception:
         return _blocked_response(
             request_id=request_id,
@@ -391,3 +475,60 @@ def analyze_document(request: DocumentAnalysisRequest):
         arguments=request.arguments,
         detection_evidence=detection_evidence,
     )
+
+
+# ============================================================
+# AUTHENTICATED AUDIT EVENTS ENDPOINT
+# ============================================================
+
+@app.get("/audit/events")
+def get_audit_events(
+    limit: int = Query(default=200, ge=1, le=500),
+    _: None = Depends(verify_api_key),
+):
+    """
+    Return recent conventional audit events.
+
+    This endpoint is intended for the authenticated dashboard.
+    It does not expose integrity checkpoint files.
+    """
+
+    if not AUDIT_LOG_PATH.exists():
+        return {
+            "events": [],
+            "count": 0,
+        }
+
+    events = []
+
+    try:
+        with AUDIT_LOG_PATH.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            for line in file:
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                try:
+                    events.append(json.loads(line))
+
+                except json.JSONDecodeError:
+                    continue
+
+    except OSError:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to read audit log",
+        )
+
+    recent_events = events[-limit:]
+    recent_events.reverse()
+
+    return {
+        "events": recent_events,
+        "count": len(recent_events),
+    }

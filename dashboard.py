@@ -13,10 +13,23 @@ import pandas as pd
 # CONFIGURATION
 # ============================================================
 
-API_BASE_URL = os.getenv(
+def get_setting(name, default=""):
+    """Read configuration from environment variables or Streamlit secrets."""
+    value = os.getenv(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+API_BASE_URL = get_setting(
     "PROMPTSHIELD_API_URL",
     "http://127.0.0.1:8000",
 ).rstrip("/")
+
+API_KEY = get_setting("PROMPTSHIELD_API_KEY", "")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -112,6 +125,13 @@ st.markdown(
 # API HELPERS
 # ============================================================
 
+def api_headers():
+    """Build authentication headers for backend requests."""
+    if API_KEY:
+        return {"X-API-Key": API_KEY}
+    return {}
+
+
 def check_api_health():
     """Check whether the FastAPI backend is reachable."""
 
@@ -133,6 +153,7 @@ def submit_analysis(payload):
     response = requests.post(
         f"{API_BASE_URL}/agent/analyze-document",
         json=payload,
+        headers=api_headers(),
         timeout=REQUEST_TIMEOUT,
     )
 
@@ -146,11 +167,29 @@ def submit_analysis(payload):
 
 def load_audit_events():
     """
-    Load recent audit events from the JSONL audit log.
+    Load recent audit events.
 
-    This is a local development audit trail, not a
-    tamper-proof security ledger.
+    When an API key is configured, retrieve events from the
+    authenticated backend. Otherwise use the local JSONL log
+    for local development.
     """
+
+    if API_KEY:
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/audit/events",
+                headers=api_headers(),
+                params={"limit": 500},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            events = payload.get("events", [])
+            return events if isinstance(events, list) else []
+
+        except requests.RequestException as exc:
+            st.error(f"Unable to retrieve backend audit events: {exc}")
+            return []
 
     events = []
 
@@ -164,17 +203,12 @@ def load_audit_events():
         ) as file:
             for line in file:
                 line = line.strip()
-
                 if not line:
                     continue
-
                 try:
-                    event = json.loads(line)
-                    events.append(event)
-
+                    events.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-
     except OSError:
         return []
 
@@ -1155,9 +1189,9 @@ elif page == "Audit Explorer":
         )
 
         st.caption(
-            "Metrics are calculated from the local JSONL audit log. "
-            "The current log is an append-only application log, "
-            "not a cryptographically tamper-evident ledger."
+            "Events are loaded from the authenticated backend when an API key is configured; "
+            "local development uses the local JSONL log. "
+            "The conventional JSONL log is separate from the integrity hash-chain evidence."
         )
 # ============================================================
 # ABOUT & LIMITATIONS
@@ -1196,8 +1230,8 @@ elif page == "About & Limitations":
           tamper-evident.
         - The dashboard is a development interface, not a
           production-hardened security operations platform.
-        - Authentication, authorization for dashboard users,
-          and production deployment controls need further work.
+        - API-key authentication protects backend execution and audit retrieval when configured.
+        - Dashboard user authentication and broader production hardening remain necessary.
 
         ### Safe demonstration
 
