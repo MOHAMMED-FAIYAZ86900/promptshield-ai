@@ -1,205 +1,194 @@
 # PromptShield AI
 
-**Runtime Security Gateway for AI Agents**
+**A runtime security gateway for AI agents that evaluates tool requests,
+enforces policy decisions, and records execution activity.**
 
-PromptShield is a prototype security gateway between an AI agent and the
-tools it can invoke. It applies deterministic authorization policies,
-detects suspicious prompt-injection patterns, validates tool arguments
-before execution, and records execution evidence in conventional and
-hash-chained audit logs.
+PromptShield is a portfolio-grade prototype demonstrating how an
+AI-agent application can place a security layer between an agent and its
+tools. It focuses on preventing unauthorized tool execution, detecting
+suspicious instructions, enforcing fail-closed authorization, and
+maintaining audit evidence.
 
-> **Project status:** Core security MVP implemented. The latest recorded
-> automated test run reports **43 passing tests**. A live FastAPI
-> request and Streamlit dashboard were also verified.
->
-> **Security scope:** This is a research/hackathon prototype, not a
-> production-certified security product. The detector uses heuristic
-> pattern matching, and the local hash-chain checkpoint is not protected
-> by an independent trust boundary.
+> **Project status:** Deployed demonstration. The hosted service is
+> intended for portfolio evaluation, not production security or durable
+> audit retention.
 
-## What it does
+## Live Demo
 
--   **Prompt-injection detection:** heuristic detection of suspicious
-    instructions in submitted documents.
--   **Deterministic policy enforcement:** explicit allow/deny decisions
-    for registered tools.
--   **Controlled tool execution:** validates arguments before any side
-    effect.
--   **Execution lifecycle evidence:** records intent before invoking an
-    authorized tool, then records the outcome.
--   **Fail-closed intent logging:** if intent persistence fails, the
-    tool is not executed.
--   **Audit integrity evidence:** stores events in a separate SHA-256
-    hash chain and verifies the chain against a local checkpoint.
--   **Monitoring dashboard:** Streamlit interface for viewing audit data
-    and security analytics.
+-   **Streamlit dashboard:**
+    https://promptshield-ai-fklfbyf39eckys9h3gucdc.streamlit.app/
+-   **FastAPI backend:** https://promptshield-ai-h37x.onrender.com
+-   **Health endpoint:**
+    https://promptshield-ai-h37x.onrender.com/health
+-   **Audit events endpoint:** `/audit/events` (requires an API key when
+    authentication is configured)
 
-### Current tool policy
+The hosted backend runs on Render's free tier. Its local filesystem is
+ephemeral unless a persistent disk is configured. Audit files can
+therefore be lost after a restart or redeployment.
 
-  Action                    Policy
-  ------------------------- -----------------
-  `summarize_document`      Allow
-  `create_support_ticket`   Allow
-  `read_customer_record`    Deny
-  `export_customer_data`    Deny
-  Unknown actions           Deny by default
+## Why PromptShield?
 
-Tools operate on synthetic sandbox data. Do not connect this prototype
-to real customer records or production systems without a separate
-security review.
+AI agents can call tools that read data, create records, or perform
+other actions. Prompt injection or an overly permissive tool interface
+can cause an agent to request actions beyond its intended authority.
+
+PromptShield introduces a separate policy enforcement layer that:
+
+1.  Receives an agent tool/action request.
+2.  Examines the requested action and its arguments.
+3.  Evaluates the request against security policy and detection signals.
+4.  Allows approved actions or blocks unauthorized actions.
+5.  Records execution intent before invoking an authorized tool.
+6.  Records the execution outcome and exposes audit events.
+
+The key design principle is **authorization before execution**. A tool
+must not execute when the execution-intent audit write fails.
 
 ## Architecture
 
 ``` mermaid
 flowchart TD
-    A[User / AI Agent Request] --> B[FastAPI API]
-    B --> C{Document supplied?}
-    C -->|Yes| D[Prompt-injection detector]
-    C -->|No| E[Policy engine]
-    D -->|Suspicious| X[Block request]
-    D -->|Not flagged| E
-    E -->|Denied / unknown| X
-    E -->|Allowed| F[Tool registry and argument validation]
-    F -->|Invalid arguments| Y[Validation failure]
-    F -->|Valid| G[Persist execution intent]
-    G -->|Persistence failure| X
-    G -->|Persisted| H[Execute registered tool]
-    H --> I[Persist execution outcome]
-    I --> J[API response]
-    G -.-> K[Conventional JSONL audit]
-    I -.-> K
-    K --> L[SHA-256 hash-chain log]
-    L --> M[Checkpoint verification]
-    K --> N[Streamlit dashboard]
+    U[User / Agent Request] --> D[Streamlit Dashboard]
+    D --> API[FastAPI Security API]
+    API --> DET[Threat / Prompt Injection Detector]
+    DET --> POL[Policy Engine]
+    POL -->|Deny| BLOCK[Blocked Response]
+    POL -->|Allow| INTENT[Persist Execution Intent]
+    INTENT -->|Write Failure| FAIL[Fail Closed - Do Not Execute]
+    INTENT -->|Write Success| EX[Tool Executor]
+    EX --> TOOLS[Allowlisted Tools]
+    EX --> OUT[Execution Outcome]
+    BLOCK --> AUD[Audit Event Store]
+    FAIL --> AUD
+    OUT --> AUD
+    AUD --> CHAIN[Hash-chain Integrity Evidence]
+    API --> RESP[API Response]
+    RESP --> D[Dashboard Result]
 ```
-## Dashboard Screenshots
 
-### 1. Security Console
-The PromptShield dashboard provides an interface for submitting
-documents and proposed agent actions for runtime security inspection.
-
-![PromptShield Security Console](docs/images/security-console.png)
-
-### 2. Threat Detection and Execution Containment
-PromptShield identifies suspicious instructions, evaluates risk,
-applies authorization policies, and blocks unauthorized actions.
-
-![Prompt Injection Detection](docs/images/threat-detection.png)
-
-### 3. Security Analytics and Audit Explorer
-The Audit Explorer provides visibility into recorded security events,
-policy decisions, execution outcomes, and suspicious activity.
-
-![PromptShield Audit Explorer](docs/images/audit-explorer.png)
-
-### Request lifecycle
-
-1.  Receive a tool request through FastAPI.
-2.  If a document is submitted for analysis, run the prompt-injection
-    detector.
-3.  Apply the deterministic policy engine. Unknown and restricted
-    actions are denied.
-4.  Resolve the registered executor and validate its arguments without
-    executing it.
-5.  Persist an `execution_intent` audit event.
-6.  Execute the prepared tool only after intent persistence succeeds.
-7.  Persist the outcome (`executed` or `execution_failed`).
-8.  Return the API result and relevant audit identifiers.
-
-If outcome logging fails after a tool has run, the API does not falsely
-report that the operation was blocked; it returns the execution result
-with an audit warning.
-
-## Security controls
+### Main components
 
   -----------------------------------------------------------------------
-  Control                             Current implementation
+  Component                           Responsibility
   ----------------------------------- -----------------------------------
-  Default-deny authorization          Explicit allowlist; unknown actions
-                                      denied
+  Streamlit dashboard                 User-facing interface for
+                                      submitting and reviewing agent
+                                      actions
 
-  Restricted operations               Customer-record read and
-                                      customer-data export denied
+  FastAPI backend                     API endpoints and request
+                                      orchestration
 
-  Prompt-injection detection          Heuristic indicators for
-                                      instruction override, secret
-                                      extraction, unauthorized access,
-                                      privilege escalation, indirect
-                                      override and hidden exfiltration
-                                      requests
+  Detector                            Identifies suspicious instruction
+                                      and access patterns
 
-  Argument validation                 Registered executor schemas
-                                      validated before execution
+  Policy engine                       Applies allow/deny decisions
 
-  Execution containment               Tool execution occurs only after
-                                      authorization, validation and
-                                      successful intent persistence
+  Executor                            Invokes only approved tools
 
-  Fail-closed intent audit            Intent persistence failure prevents
-                                      tool execution
+  Audit module                        Persists conventional JSONL audit
+                                      events
 
-  Outcome accuracy                    Outcome audit failure does not
-                                      misrepresent an already-executed
-                                      action as blocked
-
-  Conventional audit events           JSONL records with event ID,
-                                      request ID, timestamp, action,
-                                      decision, reason, policy ID,
-                                      execution status and detection
-                                      evidence
-
-  Hash-chain integrity                SHA-256 chain links each event to
-                                      the previous event
-
-  Checkpoint consistency              Verifies event count and chain-head
-                                      hash against a separate local
-                                      checkpoint
-
-  Tamper tests                        Tests cover modified, deleted,
-                                      reordered and duplicated chain
-                                      entries, plus checkpoint/log
-                                      integrity cases
+  Audit integrity module              Maintains and verifies a SHA-256
+                                      hash chain and checkpoint
   -----------------------------------------------------------------------
 
-### Detection score interpretation
+## Security Controls
 
-The detector uses heuristic pattern matching. Its risk score is an
-indicator score derived from matched patterns; it is **not a calibrated
-probability** or a substitute for measured precision/recall evaluation.
+### Tool authorization
 
-## Technology stack
+The current allowlist includes:
 
--   Python
--   FastAPI
--   Pydantic
--   Streamlit
--   Pytest
--   SHA-256 (`hashlib`)
--   JSON / JSON Lines audit storage
+-   `summarize_document`
+-   `create_support_ticket`
 
-## Project structure
+The following actions are denied:
+
+-   `read_customer_record`
+-   `export_customer_data`
+
+Unknown actions are denied by default.
+
+### Detection signals
+
+The detector includes heuristic indicators such as:
+
+-   `instruction_override`
+-   `secret_extraction`
+-   `unauthorized_record_access`
+-   `privilege_escalation`
+-   `indirect_instruction_override`
+-   `hidden_exfiltration_request`
+
+Risk scores are heuristic signals. They are **not calibrated
+probabilities** and should not be interpreted as a measured likelihood
+of attack.
+
+### Fail-closed execution lifecycle
+
+For an authorized action, the backend follows this sequence:
+
+1.  Validate the requested action and arguments.
+2.  Persist an `execution_intent` audit event.
+3.  Execute the tool only after the intent event is persisted.
+4.  Persist the execution outcome.
+
+If execution-intent persistence fails, the tool is not executed. If
+outcome auditing fails after a tool has already executed, the response
+must not misrepresent that action as blocked; the execution may have
+succeeded while its outcome record is incomplete.
+
+### API key authentication
+
+When `PROMPTSHIELD_API_KEY` is configured, protected endpoints require
+the `X-API-Key` request header. The key is compared using a
+constant-time comparison.
+
+For local development, if the environment variable is not configured,
+the API's authentication dependency permits requests. Configure a key in
+any shared or hosted deployment.
+
+### Audit integrity
+
+PromptShield includes a SHA-256 hash-chain implementation with a
+checkpoint. It can detect modifications to the stored chain when checked
+against the checkpoint and the stated trust assumptions.
+
+**This is tamper-evident prototype evidence, not tamper-proof storage.**
+The log and checkpoint are stored locally and may both be rewritten by
+an attacker with filesystem access. The locking mechanism is
+process-local, not a distributed or multi-process coordination
+mechanism. A crash between appending a chain entry and updating its
+checkpoint can also leave a mismatch that causes verification to fail.
+
+The `/audit/events` endpoint returns conventional audit events. It
+should not be treated by itself as proof that the separate integrity
+chain has verified successfully.
+
+## Technology Stack
+
+-   **Backend:** Python, FastAPI, Uvicorn
+-   **Dashboard:** Streamlit
+-   **Validation and testing:** pytest
+-   **Audit storage:** JSON Lines (JSONL)
+-   **Integrity mechanism:** SHA-256 hash chaining and checkpoint
+    verification
+-   **Deployment:** Render (backend), Streamlit Community Cloud
+    (dashboard)
+
+## Repository Structure
 
 ``` text
 promptshield/
 ├── app/
+│   ├── main.py
 │   ├── audit.py
 │   ├── audit_integrity.py
 │   ├── detector.py
 │   ├── executor.py
-│   ├── main.py
 │   ├── policy_engine.py
-│   ├── schemas.py
-│   └── tools.py
-├── data/
-├── evaluation/
-│   ├── diagnose_audit.py
-│   ├── run_evaluation.py
-│   ├── stage16_classify_audit.py
-│   ├── validate_audit.py
-│   ├── validate_audit_v2.py
-│   └── validate_audit_v3.py
-├── logs/
-├── reports/
+│   ├── tools.py
+│   └── schemas.py
 ├── tests/
 │   ├── test_api.py
 │   ├── test_audit_integrity.py
@@ -210,313 +199,262 @@ promptshield/
 │   ├── test_evidence.py
 │   ├── test_execution_lifecycle.py
 │   └── test_policy.py
+├── logs/
 ├── dashboard.py
 ├── requirements.txt
 └── README.md
 ```
 
-Review generated logs, local checkpoints, virtual environments, caches
-and synthetic/private data before publishing. Keep machine-specific and
-temporary files out of version control.
+The exact repository contents may evolve; this tree describes the
+intended application layout.
 
-## Requirements
+## Run Locally
 
--   Python 3.10 or newer (developed and tested in a Python 3.13 virtual
-    environment).
--   Windows, macOS or Linux.
--   `pip`.
-
-Install dependencies from the repository's `requirements.txt`; exact
-dependency versions are defined there.
-
-## Installation
-
-### Windows PowerShell
-
-``` powershell
-git clone <YOUR_REPOSITORY_URL>
-cd promptshield
-
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-### macOS / Linux
+### 1. Clone the repository
 
 ``` bash
-git clone <YOUR_REPOSITORY_URL>
-cd promptshield
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+git clone https://github.com/MOHAMMED-FAIYAZ86900/promptshield-ai.git
+cd promptshield-ai
 ```
 
-## Run the application
+### 2. Create and activate a virtual environment
 
-Run the API and dashboard in separate terminals from the project root,
-with the virtual environment activated in each.
+**Windows PowerShell**
 
-### 1. Start the FastAPI backend
+``` powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+**macOS / Linux**
+
+``` bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install dependencies
+
+``` bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 4. Configure environment variables
+
+PowerShell example:
+
+``` powershell
+$env:PROMPTSHIELD_API_KEY = "replace-with-a-long-random-secret"
+$env:PROMPTSHIELD_AUDIT_LOG = "logs/audit.jsonl"
+$env:PROMPTSHIELD_INTEGRITY_LOG = "logs/integrity_audit.jsonl"
+$env:PROMPTSHIELD_INTEGRITY_CHECKPOINT = "logs/integrity_checkpoint.json"
+```
+
+Use a newly generated secret. Do not commit API keys, `.env` files,
+audit logs containing sensitive data, or deployment secrets to Git.
+
+The audit path variables are optional if the application's defaults are
+suitable for your environment. Ensure the process has permission to
+create and write to the selected directory.
+
+### 5. Start the FastAPI backend
 
 ``` bash
 uvicorn app.main:app --reload
 ```
 
--   API base URL: `http://127.0.0.1:8000`
+The API is available at:
+
+-   `http://127.0.0.1:8000`
 -   Interactive API documentation: `http://127.0.0.1:8000/docs`
--   Health endpoint: `http://127.0.0.1:8000/health`
+-   Health check: `http://127.0.0.1:8000/health`
 
-### 2. Start the Streamlit dashboard
+### 6. Start the dashboard
 
-``` bash
-python -m streamlit run dashboard.py
-```
-
-Dashboard: `http://localhost:8501`
-
-### 3. Verify health
+In a second terminal, activate the same virtual environment and run:
 
 ``` bash
-curl http://127.0.0.1:8000/health
+streamlit run dashboard.py
 ```
 
-Expected response:
+Configure the dashboard's backend URL and API key using Streamlit
+secrets or the configuration mechanism implemented in `dashboard.py`. Do
+not place secrets in source control.
 
-``` json
-{
-  "status": "healthy"
+## API Overview
+
+The current backend exposes these principal routes:
+
+  ---------------------------------------------------------------------------
+  Method                  Endpoint                    Purpose
+  ----------------------- --------------------------- -----------------------
+  `GET`                   `/`                         Basic service/root
+                                                      response
+
+  `GET`                   `/health`                   Health check
+
+  `POST`                  `/agent/run`                Evaluate and process an
+                                                      agent tool/action
+                                                      request
+
+  `POST`                  `/agent/analyze-document`   Analyze a document
+                                                      request through the
+                                                      security workflow
+
+  `GET`                   `/audit/events`             Retrieve recent
+                                                      conventional audit
+                                                      events
+  ---------------------------------------------------------------------------
+
+The agent execution and audit routes are protected when
+`PROMPTSHIELD_API_KEY` is configured. Supply the key using the
+`X-API-Key` header.
+
+### Example: retrieve audit events
+
+``` powershell
+$headers = @{
+    "X-API-Key" = $env:PROMPTSHIELD_API_KEY
 }
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/audit/events?limit=50" `
+    -Headers $headers `
+    -Method Get
 ```
 
-## API usage
+For exact request and response schemas, use the running API's `/docs`
+page. Request payload fields should follow the Pydantic schemas in
+`app/schemas.py`.
 
-The interactive API documentation at `/docs` is the authoritative
-reference for the running application's request schemas.
+## Testing
 
-### Health check
+Run the automated test suite from the repository root:
 
-``` http
-GET /health
+``` bash
+python -m pytest -q
 ```
 
-### Execute an allowed tool
+Run a specific test module:
 
-``` http
-POST /agent/run
-Content-Type: application/json
+``` bash
+python -m pytest tests/test_execution_lifecycle.py -q
 ```
 
-Example request:
+Tests cover API behavior, policy decisions, detector signals, execution
+lifecycle, audit evidence, and integrity storage. Use the current test
+run from your own checkout as the source of truth for the passing test
+count; results can change as the project changes.
 
-``` json
-{
-  "action": "summarize_document",
-  "arguments": {
-    "document": "PromptShield is a runtime security gateway for AI agents."
-  }
-}
-```
+## Deployment
 
-A successful response includes execution status, result, request ID and
-audit event identifiers. Exact response fields are defined by the
-running application.
+### Backend --- Render
 
-### Attempt a restricted action
-
-``` json
-{
-  "action": "read_customer_record",
-  "arguments": {
-    "customer_id": "CUST-1001"
-  }
-}
-```
-
-This action is denied by the current policy. The identifier is
-synthetic; access to customer records is not enabled.
-
-### Analyze a document
-
-``` http
-POST /agent/analyze-document
-Content-Type: application/json
-```
-
-Use `/docs` to inspect the exact `DocumentAnalysisRequest` schema
-accepted by the running version. The endpoint applies prompt-injection
-detection before the requested registered action is considered for
-execution.
-
-## Audit integrity
-
-PromptShield maintains two distinct audit artifacts:
-
--   **Conventional audit log:** JSONL events written by the application
-    audit logger.
--   **Integrity audit log:** a separate JSONL stream where each event
-    contains a sequence number, previous-event hash, original event
-    payload and SHA-256 event hash.
-
-A separate checkpoint records the event count and current chain-head
-hash.
-
-Default paths:
+1.  Create a Render Web Service connected to the GitHub repository.
+2.  Install dependencies with `pip install -r requirements.txt`.
+3.  Start the service with
+    `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+4.  Configure `PROMPTSHIELD_API_KEY` as a secret environment variable.
+5.  Configure the audit paths. For a free-tier ephemeral filesystem,
+    relative paths such as the following are suitable for a demo:
 
 ``` text
-logs/audit.jsonl
-logs/integrity_audit.jsonl
-logs/integrity_checkpoint.json
+PROMPTSHIELD_AUDIT_LOG=logs/audit.jsonl
+PROMPTSHIELD_INTEGRITY_LOG=logs/integrity_audit.jsonl
+PROMPTSHIELD_INTEGRITY_CHECKPOINT=logs/integrity_checkpoint.json
 ```
 
-The integrity paths can be overridden with environment variables:
+6.  Confirm `/health` responds and test protected endpoints with the
+    configured key.
 
-``` powershell
-$env:PROMPTSHIELD_INTEGRITY_LOG = "logs/integrity_audit.jsonl"
-$env:PROMPTSHIELD_INTEGRITY_CHECKPOINT = "logs/integrity_checkpoint.json"
-```
+**Persistence warning:** Relative paths on an ephemeral filesystem do
+not provide durable audit retention. Use an appropriately secured
+persistent storage service or managed database for production.
 
-Verify the stored chain:
+### Dashboard --- Streamlit Community Cloud
 
-``` powershell
-python -c "from app.audit_integrity import verify_integrity_storage; from pathlib import Path; print(verify_integrity_storage(Path('logs/integrity_audit.jsonl'), Path('logs/integrity_checkpoint.json')))"
-```
+1.  Deploy `dashboard.py` from the repository.
+2.  Configure the backend URL to point to the deployed FastAPI service.
+3.  Add the matching API key in Streamlit Secrets using the exact secret
+    name expected by the dashboard code.
+4.  Verify that the dashboard can reach the backend and submit both
+    allowed and denied test cases.
 
-A valid result reports `valid: True`, the number of verified events, the
-chain-head hash and an empty error list.
+Never add the API key to the repository or include it in screenshots,
+logs, or public demonstrations.
 
-### Integrity limitations
+## Manual Security Validation
 
-The hash chain detects inconsistencies when events are modified,
-removed, reordered or duplicated without recomputing the chain. The
-checkpoint detects disagreement between the stored chain and checkpoint.
+Use the dashboard or API to exercise these scenarios:
 
-However, the log and checkpoint are both local writable files. An
-attacker who can rewrite both can potentially recompute the chain and
-checkpoint. The current implementation does not provide an independently
-protected checkpoint, digital signatures, remote immutable storage or
-multi-process coordination. The append lock is process-local. Treat this
-as **tamper-evident integrity checking within the prototype's trust
-assumptions**, not tamper-proof or production-grade audit storage.
+  -----------------------------------------------------------------------
+  Scenario                            Expected behavior
+  ----------------------------------- -----------------------------------
+  Benign `summarize_document` request Allowed and executed
 
-The original historical audit log is not retroactively migrated into the
-hash chain.
+  Valid `create_support_ticket`       Allowed and executed
+  request                             
 
-## Testing and evaluation
+  `read_customer_record` request      Blocked
 
-Run the complete test suite:
+  `export_customer_data` request      Blocked
 
-``` bash
-python -m pytest -v
-```
+  Unknown tool/action                 Blocked by default
 
-Latest recorded test run:
+  Prompt injection or                 Detected and blocked according to
+  secret-extraction attempt           policy
+  -----------------------------------------------------------------------
 
-  Test group                       Passed
-  ------------------------------ --------
-  API                                   5
-  Hash-chain integrity                  7
-  Integrity integration                 2
-  Persistent integrity storage          5
-  Prompt-injection containment          6
-  Detector                              5
-  Audit evidence                        4
-  Execution lifecycle                   4
-  Policy engine                         5
-  **Total**                        **43**
+After each request, inspect the audit events. Also run the integrity
+verification functionality available in the application and inspect its
+result independently. A successful API response or an audit-event
+listing alone does not establish hash-chain validity.
 
-**Latest recorded result: 43 passed, 0 failed.** One non-blocking
-Starlette deprecation warning was reported by the test environment.
+## Current Limitations
 
-### Live verification
-
-A live FastAPI request to `POST /agent/run` was verified to:
-
--   Return HTTP 200 and a successful execution result.
--   Produce two integrity events in order: `execution_intent`, then
-    `executed`.
--   Use the same request ID for both events.
--   Pass hash-chain and checkpoint verification.
-
-A separate integrity verification reported 45 valid events with zero
-errors at the time of that check. Counts change as additional requests
-and tests write to the configured log.
-
-### Evaluation artifacts
-
-The repository includes:
-
--   `evaluation/run_evaluation.py` --- synthetic evaluation runner.
--   `reports/security_evaluation.json` --- evaluation output.
--   `evaluation/validate_audit_v3.py` --- audit validation utility.
--   `evaluation/stage16_classify_audit.py` --- historical audit
-    classification.
--   `reports/stage16_audit_classification.json` --- historical
-    classification report.
-
-Historical audit classification identified 49 executed events without
-corresponding intent records and 31 legacy/incomplete events. Their
-historical root cause was not proven. These findings remain documented
-and should not be described as resolved.
-
-No detector precision, recall, F1 score or false-positive rate is
-claimed here; publish those only after confirming the measured results
-and evaluation methodology.
-
-## Known limitations
-
--   Prompt-injection detection is heuristic and regex-based; it is not a
-    semantic or model-based classifier.
--   The risk score is not a calibrated probability.
--   The tool set is a controlled synthetic sandbox, not a production
-    integration.
--   Local hash-chain and checkpoint files do not protect against an
-    attacker who can rewrite both.
--   Audit synchronization is process-local; multi-worker or distributed
-    deployment requires stronger coordination.
--   Authentication, role-based access control, secrets management,
-    deployment hardening and external monitoring require further work.
--   Historical audit anomalies remain documented and their root cause is
-    unproven.
+-   Detection is heuristic and may produce false positives or false
+    negatives.
+-   Risk scores are not calibrated probabilities.
+-   The allowlist and policies are prototype-level controls, not a
+    complete enterprise authorization system.
+-   Local JSONL audit storage is not a substitute for centralized,
+    access-controlled, durable logging.
+-   The integrity chain and checkpoint share the same local trust
+    boundary.
+-   Process-local locking does not provide multi-worker or distributed
+    write coordination.
+-   No claim of production-grade tamper resistance, compliance
+    certification, or complete prompt-injection prevention is made.
+-   Hosted free-tier storage may be ephemeral.
 
 ## Roadmap
 
--   [ ] Add an independently protected checkpoint or remote immutable
-    audit storage.
--   [ ] Add digital signatures and key-management controls.
--   [ ] Add multi-process-safe and distributed audit coordination.
--   [ ] Expand prompt-injection datasets and measure precision, recall,
-    F1 and false-positive rates.
--   [ ] Add stronger tool input/output inspection and sensitive-data
-    controls.
--   [ ] Add authentication, authorization and deployment hardening.
--   [ ] Expand dashboard integrity reporting and operational monitoring.
--   [ ] Add reproducible deployment and security evaluation
-    instructions.
+Potential next steps for a production-oriented evolution:
 
-## Contributing
+-   Move audit storage to durable, access-controlled storage.
+-   Use a transactional event-writing design or durable queue for audit
+    and execution coordination.
+-   Add multi-process-safe concurrency control.
+-   Protect integrity checkpoints with an external trust anchor or
+    signing key.
+-   Expand policy evaluation with scoped identities, permissions, and
+    tool-level argument schemas.
+-   Add detector evaluation datasets, precision/recall metrics, and
+    adversarial regression tests.
+-   Add structured observability, alerting, rate limits, and deployment
+    hardening.
 
-For security-sensitive changes, include:
+## Author
 
-1.  A clear threat or failure scenario.
-2.  The expected security invariant.
-3.  Automated tests demonstrating the behavior.
-4.  Any new limitations or trust assumptions.
+**Mohammed Faiyaz**
 
-Do not submit real credentials, customer records, production audit logs
-or other sensitive data.
+-   GitHub: https://github.com/MOHAMMED-FAIYAZ86900
 
-## License
+## Disclaimer
 
-No license has been specified. Add a `LICENSE` file before presenting
-this repository as open source. Until then, all rights remain with the
-copyright holder.
-
-------------------------------------------------------------------------
-
-**PromptShield AI --- Runtime Security Gateway for AI Agents**
+PromptShield AI is an educational and portfolio project demonstrating
+runtime controls for AI-agent tool execution. It is not a guarantee that
+an AI system is secure, and it should not be deployed to protect
+production data or critical systems without substantial additional
+engineering, independent security review, and operational controls.
